@@ -1,0 +1,157 @@
+#include <opencv2/opencv.hpp>
+#include <windows.h>
+#include <iostream>
+#include <thread>
+
+// 全局变量保存原图宽高比
+double originalAspectRatio = 1.0;
+double transformedAspectRatio = 1.0;
+
+// 检查窗口大小并强制保持宽高比
+void enforceAspectRatio(const std::string& windowName, double aspectRatio) {
+    // 检查窗口是否存在，防止在窗口关闭后继续尝试更新
+    if (cv::getWindowProperty(windowName, cv::WND_PROP_VISIBLE) < 1) {
+        return; // 窗口已关闭，直接返回
+    }
+    cv::Rect windowRect = cv::getWindowImageRect(windowName);
+    int currentWidth = windowRect.width;
+    int newHeight = static_cast<int>(currentWidth / aspectRatio);
+    cv::resizeWindow(windowName, currentWidth, newHeight);
+}
+
+// 显示图像的辅助函数
+void showImage(const std::string& windowName, const cv::Mat& image, double aspectRatio) {
+    cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+
+    // 启动一个线程持续保持宽高比
+    std::thread([&]() {
+        while (cv::getWindowProperty(windowName, cv::WND_PROP_VISIBLE) >= 1) {
+            enforceAspectRatio(windowName, aspectRatio);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        }).detach();
+
+        cv::imshow(windowName, image);
+}
+
+// 傅里叶变换与反变换
+void performFourierTransform(const cv::Mat& inputImage, cv::Mat& magnitudeImage, cv::Mat& inverseTransform) {
+    cv::Mat grayImage;
+    cvtColor(inputImage, grayImage, cv::COLOR_BGR2GRAY);
+
+    // 转换为浮点数类型
+    cv::Mat padded;
+    int m = cv::getOptimalDFTSize(grayImage.rows);
+    int n = cv::getOptimalDFTSize(grayImage.cols);
+    copyMakeBorder(grayImage, padded, 0, m - grayImage.rows, 0, n - grayImage.cols, cv::BORDER_CONSTANT, cv::Scalar::all(0));
+
+    cv::Mat planes[] = { cv::Mat_<float>(padded), cv::Mat::zeros(padded.size(), CV_32F) };
+    cv::Mat complexImage;
+    merge(planes, 2, complexImage);
+
+    // 执行傅里叶变换
+    cv::dft(complexImage, complexImage);
+
+    // 计算幅度谱
+    split(complexImage, planes);
+    magnitude(planes[0], planes[1], planes[0]);
+    magnitudeImage = planes[0];
+
+    magnitudeImage += cv::Scalar::all(1);
+    log(magnitudeImage, magnitudeImage);
+
+    // 裁剪幅度谱和归一化
+    magnitudeImage = magnitudeImage(cv::Rect(0, 0, magnitudeImage.cols & -2, magnitudeImage.rows & -2));
+    normalize(magnitudeImage, magnitudeImage, 0, 1, cv::NORM_MINMAX);
+
+    // 反变换
+    cv::idft(complexImage, inverseTransform, cv::DFT_SCALE | cv::DFT_REAL_OUTPUT);
+    normalize(inverseTransform, inverseTransform, 0, 1, cv::NORM_MINMAX);
+}
+
+// 余弦变换与反变换
+void performCosineTransform(const cv::Mat& inputImage, cv::Mat& dctImageNormalized, cv::Mat& inverseDCTImage) {
+    cv::Mat grayImage;
+    cvtColor(inputImage, grayImage, cv::COLOR_BGR2GRAY);
+
+    cv::Mat floatImage;
+    grayImage.convertTo(floatImage, CV_32F);
+
+    // 执行离散余弦变换
+    cv::Mat dctImage;
+    cv::dct(floatImage, dctImage);
+
+    // 归一化
+    normalize(dctImage, dctImageNormalized, 0, 1, cv::NORM_MINMAX);
+
+    // 反变换
+    cv::idct(dctImage, inverseDCTImage);
+    normalize(inverseDCTImage, inverseDCTImage, 0, 1, cv::NORM_MINMAX);
+}
+
+int main() {
+    OPENFILENAMEW ofn;  // 使用宽字符版本的 OPENFILENAME
+    wchar_t szFile[260];
+
+    // 初始化OPENFILENAME结构体
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = NULL;
+    ofn.lpstrFile = szFile;
+    ofn.lpstrFile[0] = L'\0';
+    ofn.nMaxFile = sizeof(szFile);
+    ofn.lpstrFilter = L"JPEG Files (*.jpg)\0*.jpg\0BMP Files (*.bmp)\0*.bmp\0All Files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    // 显示文件选择对话框
+    if (GetOpenFileNameW(&ofn) == TRUE) {
+        // 将宽字符路径转换为多字节路径
+        char mbFile[260];
+        WideCharToMultiByte(CP_ACP, 0, ofn.lpstrFile, -1, mbFile, sizeof(mbFile), NULL, NULL);
+
+        // 读取图像
+        cv::Mat inputImage = cv::imread(mbFile, cv::IMREAD_COLOR);
+
+        // 检查图像是否成功读取
+        if (inputImage.empty()) {
+            std::cerr << "无法读取图像: " << mbFile << std::endl;
+            return -1;
+        }
+
+        // 保存原始图像宽高比
+        originalAspectRatio = static_cast<double>(inputImage.cols) / inputImage.rows;
+
+        // 显示原始图像
+        showImage("原始图像", inputImage, originalAspectRatio);
+
+        // 傅里叶变换与反变换
+        cv::Mat magnitudeImage, inverseTransform;
+        performFourierTransform(inputImage, magnitudeImage, inverseTransform);
+        transformedAspectRatio = static_cast<double>(magnitudeImage.cols) / magnitudeImage.rows;
+
+        // 显示傅里叶变换结果
+        showImage("傅里叶变换幅度谱", magnitudeImage, transformedAspectRatio);
+        showImage("傅里叶反变换", inverseTransform, originalAspectRatio);
+
+        // 余弦变换与反变换
+        cv::Mat dctImageNormalized, inverseDCTImage;
+        performCosineTransform(inputImage, dctImageNormalized, inverseDCTImage);
+
+        // 显示余弦变换结果
+        showImage("余弦变换", dctImageNormalized, originalAspectRatio);
+        showImage("余弦反变换", inverseDCTImage, originalAspectRatio);
+
+        // 等待所有窗口关闭
+        cv::waitKey(0);
+        cv::destroyAllWindows();
+    }
+    else {
+        std::cout << "用户取消了文件选择。" << std::endl;
+    }
+
+    return 0;
+}
