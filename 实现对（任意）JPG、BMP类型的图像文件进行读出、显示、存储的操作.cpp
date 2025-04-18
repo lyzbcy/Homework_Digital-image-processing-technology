@@ -1,6 +1,25 @@
 #include <opencv2/opencv.hpp>
-#include <stdio.h>
 #include <windows.h>
+#include <stdio.h>
+
+// 全局变量保存原图宽高比
+double originalAspectRatio = 1.0;
+
+// 检查窗口大小并强制保持宽高比
+void enforceAspectRatio(const std::string& windowName) {
+    // 检查窗口是否存在，防止在窗口关闭后继续尝试更新
+    if (cv::getWindowProperty(windowName, cv::WND_PROP_VISIBLE) < 1) {
+        return; // 窗口已关闭，直接返回
+    }
+
+    cv::Rect windowRect = cv::getWindowImageRect(windowName);
+    int currentWidth = windowRect.width;
+    int currentHeight = windowRect.height;
+
+    // 计算新高度以匹配原始宽高比
+    int newHeight = static_cast<int>(currentWidth / originalAspectRatio);
+    cv::resizeWindow(windowName, currentWidth, newHeight);
+}
 
 int main() {
     OPENFILENAMEW ofn;  // 使用宽字符版本的 OPENFILENAME
@@ -35,14 +54,33 @@ int main() {
             return -1;
         }
 
+        // 保存原图宽高比
+        originalAspectRatio = static_cast<double>(image.cols) / image.rows;
+
         // 显示图像，使用 cv::WINDOW_NORMAL 使窗口可自由调整大小
-        cv::namedWindow("显示图像", cv::WINDOW_NORMAL);
-        cv::imshow("显示图像", image);
+        const std::string windowName = "显示图像";
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
 
-        // 等待按键
-        cv::waitKey(0);
+        // 显示图像
+        cv::imshow(windowName, image);
 
-        // 存储图像，使用保存文件对话框选择保存路径
+        // 主循环：检查窗口大小并保持宽高比
+        while (true) {
+            enforceAspectRatio(windowName);
+
+            // 检查窗口是否已关闭
+            if (cv::getWindowProperty(windowName, cv::WND_PROP_VISIBLE) < 1) {
+                break; // 窗口已关闭，退出循环
+            }
+
+            // 等待按键，按下 'q' 退出
+            char key = cv::waitKey(100);
+            if (key == 'q') {
+                break;
+            }
+        }
+
+        // 弹出保存文件对话框
         wchar_t savePath[260];
         ZeroMemory(&ofn, sizeof(ofn));
         ofn.lStructSize = sizeof(ofn);
