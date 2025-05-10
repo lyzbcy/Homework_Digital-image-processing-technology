@@ -1,0 +1,121 @@
+#include <opencv2/opencv.hpp>
+#include <windows.h>
+#include <iostream>
+
+cv::Mat inputImage;
+std::string windowBase = "图像变换 - ";
+
+void showImage(const std::string& name, const cv::Mat& img) {
+    cv::namedWindow(name, cv::WINDOW_NORMAL);
+    cv::imshow(name, img);
+}
+
+// 傅里叶变换（灰度显示频谱图）
+void applyDFT(const cv::Mat& src) {
+    cv::Mat gray, padded;
+    cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
+    int m = cv::getOptimalDFTSize(gray.rows);
+    int n = cv::getOptimalDFTSize(gray.cols);
+    cv::copyMakeBorder(gray, padded, 0, m - gray.rows, 0, n - gray.cols, cv::BORDER_CONSTANT, cv::Scalar::all(0));
+
+    cv::Mat planes[] = { cv::Mat_<float>(padded), cv::Mat::zeros(padded.size(), CV_32F) };
+    cv::Mat complexI;
+    cv::merge(planes, 2, complexI);
+    cv::dft(complexI, complexI);
+
+    cv::split(complexI, planes);
+    cv::magnitude(planes[0], planes[1], planes[0]);
+    cv::Mat mag = planes[0];
+    mag += 1;
+    cv::log(mag, mag);
+    cv::normalize(mag, mag, 0, 255, cv::NORM_MINMAX);
+    mag.convertTo(mag, CV_8U);
+    showImage(windowBase + "傅里叶变换（频谱）", mag);
+}
+
+// 傅里叶反变换（还原彩色图像）
+void applyIDFT(const cv::Mat& src) {
+    std::vector<cv::Mat> channels, restored(3);
+    cv::split(src, channels);
+    for (int i = 0; i < 3; ++i) {
+        cv::Mat padded, complexI;
+        int m = cv::getOptimalDFTSize(channels[i].rows);
+        int n = cv::getOptimalDFTSize(channels[i].cols);
+        cv::copyMakeBorder(channels[i], padded, 0, m - channels[i].rows, 0, n - channels[i].cols, cv::BORDER_CONSTANT, cv::Scalar::all(0));
+        cv::Mat planes[] = { cv::Mat_<float>(padded), cv::Mat::zeros(padded.size(), CV_32F) };
+        cv::merge(planes, 2, complexI);
+        cv::dft(complexI, complexI);
+        cv::idft(complexI, padded, cv::DFT_SCALE | cv::DFT_REAL_OUTPUT);
+        restored[i] = padded(cv::Rect(0, 0, channels[i].cols, channels[i].rows));
+        restored[i].convertTo(restored[i], CV_8U);
+    }
+    cv::Mat result;
+    cv::merge(restored, result);
+    showImage(windowBase + "傅里叶反变换（还原图像）", result);
+}
+
+// 余弦变换（DCT）
+void applyDCT(const cv::Mat& src) {
+    cv::Mat gray, floatImg, dctImg;
+    cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
+    gray.convertTo(floatImg, CV_32F);
+    cv::dct(floatImg, dctImg);
+    cv::log(cv::abs(dctImg) + 1, dctImg);
+    cv::normalize(dctImg, dctImg, 0, 255, cv::NORM_MINMAX);
+    dctImg.convertTo(dctImg, CV_8U);
+    showImage(windowBase + "余弦变换（DCT）", dctImg);
+}
+
+// 余弦反变换（还原彩色图像）
+void applyIDCT(const cv::Mat& src) {
+    std::vector<cv::Mat> channels, restored(3);
+    cv::split(src, channels);
+    for (int i = 0; i < 3; ++i) {
+        cv::Mat floatCh, dctCh;
+        channels[i].convertTo(floatCh, CV_32F);
+        cv::dct(floatCh, dctCh);
+        cv::idct(dctCh, floatCh);
+        floatCh.convertTo(restored[i], CV_8U);
+    }
+    cv::Mat result;
+    cv::merge(restored, result);
+    showImage(windowBase + "余弦反变换（还原图像）", result);
+}
+
+int main() {
+    OPENFILENAMEW ofn;
+    wchar_t szFile[260];
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFile = szFile;
+    ofn.lpstrFile[0] = L'\0';
+    ofn.nMaxFile = sizeof(szFile);
+    ofn.lpstrFilter = L"Image Files\0*.jpg;*.png;*.bmp\0All Files\0*.*\0";
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    if (GetOpenFileNameW(&ofn)) {
+        char mbFile[260];
+        WideCharToMultiByte(CP_ACP, 0, ofn.lpstrFile, -1, mbFile, sizeof(mbFile), NULL, NULL);
+        inputImage = cv::imread(mbFile, cv::IMREAD_COLOR);
+        if (inputImage.empty()) {
+            std::cerr << "图像读取失败。" << std::endl;
+            return -1;
+        }
+
+        showImage(windowBase + "原始图像", inputImage);
+
+        applyDFT(inputImage);
+        applyIDFT(inputImage);
+        applyDCT(inputImage);
+        applyIDCT(inputImage);
+
+        std::cout << "按任意键退出..." << std::endl;
+        cv::waitKey(0);
+        cv::destroyAllWindows();
+    }
+    else {
+        std::cout << "用户取消选择。" << std::endl;
+    }
+
+    return 0;
+}

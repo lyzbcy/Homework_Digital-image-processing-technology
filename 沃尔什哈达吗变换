@@ -1,0 +1,106 @@
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <cmath>
+#include <windows.h>
+#include <commdlg.h>
+#include <math.h>
+
+// 打开文件选择对话框（Windows 原生方式）
+std::string openFileDialog() {
+    char filename[MAX_PATH] = "";
+    OPENFILENAMEA ofn;
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "Image Files (*.jpg;*.jpeg;*.png;*.bmp)\0*.jpg;*.jpeg;*.png;*.bmp\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrTitle = "选择图像";
+
+    if (GetOpenFileNameA(&ofn)) {
+        return std::string(filename);
+    }
+    return "";
+}
+
+// 构造沃尔什-哈达玛矩阵
+cv::Mat createHadamardMatrix(int n) {
+    CV_Assert((n & (n - 1)) == 0); // n 必须是2的幂
+    cv::Mat H = cv::Mat::ones(1, 1, CV_32F);
+
+    for (int i = 1; i < n; i *= 2) {
+        cv::Mat H_next(i * 2, i * 2, CV_32F);
+        H.copyTo(H_next(cv::Rect(0, 0, i, i)));
+        H.copyTo(H_next(cv::Rect(i, 0, i, i)));
+        H.copyTo(H_next(cv::Rect(0, i, i, i)));
+        H_next(cv::Rect(i, i, i, i)) = -H;
+        H = H_next.clone();
+    }
+
+    return H / std::sqrt((float)n); // 归一化
+}
+
+// 沃尔什-哈达玛变换
+cv::Mat walshHadamardTransform(const cv::Mat& src) {
+    int rows = src.rows;
+    int cols = src.cols;
+    int maxRC = (rows > cols) ? rows : cols;
+    int n = 1;
+    while (n < maxRC) n *= 2;
+
+    cv::Mat padded;
+    cv::copyMakeBorder(src, padded, 0, n - rows, 0, n - cols, cv::BORDER_CONSTANT, 0);
+
+    padded.convertTo(padded, CV_32F);
+    cv::Mat H = createHadamardMatrix(n);
+
+    cv::Mat temp = H * padded * H;
+    return temp(cv::Rect(0, 0, cols, rows)); // 截断为原图大小
+}
+
+// 逆沃尔什-哈达玛变换
+cv::Mat inverseWalshHadamardTransform(const cv::Mat& src) {
+    return walshHadamardTransform(src); // 自逆
+}
+
+// 显示图像并自动调整大小（最大宽/高为 maxSize）
+void showResized(const std::string& windowName, cv::Mat& image, int maxSize = 800) {
+    if (image.cols > maxSize || image.rows > maxSize) {
+        float scaleX = static_cast<float>(maxSize) / image.cols;
+        float scaleY = static_cast<float>(maxSize) / image.rows;
+        float scale = (scaleX < scaleY) ? scaleX : scaleY;
+        cv::resize(image, image, cv::Size(), scale, scale);
+    }
+    cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+    cv::imshow(windowName, image);
+}
+
+
+int main() {
+    std::string filename = openFileDialog();
+    if (filename.empty()) {
+        std::cerr << "未选择图像文件。" << std::endl;
+        return -1;
+    }
+
+    cv::Mat image = cv::imread(filename, cv::IMREAD_GRAYSCALE);
+    if (image.empty()) {
+        std::cerr << "图像加载失败。" << std::endl;
+        return -1;
+    }
+
+    cv::Mat transformed = walshHadamardTransform(image);
+    cv::Mat recovered = inverseWalshHadamardTransform(transformed);
+
+    transformed = cv::abs(transformed);
+    cv::normalize(transformed, transformed, 0, 255, cv::NORM_MINMAX);
+    transformed.convertTo(transformed, CV_8U);
+    recovered.convertTo(recovered, CV_8U);
+
+    showResized("原图", image);
+    showResized("沃尔什-哈达玛变换结果", transformed);
+    showResized("还原图像", recovered);
+
+    cv::waitKey(0);
+    return 0;
+}
